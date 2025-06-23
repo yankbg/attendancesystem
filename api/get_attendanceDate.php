@@ -34,52 +34,44 @@ if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
     exit;
 }
 
-// Database connection
-$conn = new mysqli("localhost", "root", "", "AttendanceSystem", 3306);
-if ($conn->connect_error) {
+// Parse PostgreSQL connection info from Neon URL
+$dbUrl = 'postgresql://neondb_owner:npg_0kXx8aimHZfn@ep-super-haze-a92tp83o-pooler.gwc.azure.neon.tech/AttendanceSystem?sslmode=require';
+$dbConfig = parse_url($dbUrl);
+
+$dbHost = $dbConfig['host'] ?? '';
+$dbPort = $dbConfig['port'] ?? 5432;
+$dbUser = $dbConfig['user'] ?? '';
+$dbPass = $dbConfig['pass'] ?? '';
+$dbName = ltrim($dbConfig['path'] ?? '', '/');
+
+try {
+    // Connect to PostgreSQL via PDO
+    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
+    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+} catch (PDOException $e) {
     echo json_encode([
         "status" => "error",
-        "message" => "Database connection failed : " . $conn->connect_error
+        "message" => "Database connection failed: " . $e->getMessage()
     ]);
     exit;
 }
 
-// Prepare and execute the query
-$stmt = $conn->prepare("SELECT student_id, student_name, time FROM attendance WHERE date = ?");
-if (!$stmt) {
+try {
+    // Prepare and execute the query
+    $stmt = $pdo->prepare("SELECT student_id, student_name, time FROM attendance WHERE date = :date");
+    $stmt->bindParam(':date', $date);
+    $stmt->execute();
+
+    $attendanceRecords = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    echo json_encode([
+        "status" => "success",
+        "date" => $date,
+        "data" => $attendanceRecords
+    ]);
+} catch (PDOException $e) {
     echo json_encode([
         "status" => "error",
-        "message" => "Prepare failed: " . $conn->error
+        "message" => "Query failed: " . $e->getMessage()
     ]);
-    $conn->close();
-    exit;
 }
-
-$stmt->bind_param("s", $date);
-
-if (!$stmt->execute()) {
-    echo json_encode([
-        "status" => "error",
-        "message" => "Execute failed: " . $stmt->error
-    ]);
-    $stmt->close();
-    $conn->close();
-    exit;
-}
-
-$result = $stmt->get_result();
-
-$attendanceRecords = [];
-while ($row = $result->fetch_assoc()) {
-    $attendanceRecords[] = $row;
-}
-
-$stmt->close();
-$conn->close();
-
-echo json_encode([
-    "status" => "success",
-    "date" => $date,
-    "data" => $attendanceRecords
-]);
-?>
