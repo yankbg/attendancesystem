@@ -10,24 +10,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit();
 }
 
-// For GET requests (optional testing)
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $input = file_get_contents('php://input');
-    $data = json_decode($input, true);
-    echo json_encode([
-        "status" => "info",
-        "message" => "This endpoint expects POST requests with attendance data",
-        "data_received" => $data
-    ]);
-    exit;
-}
+// Parse Neon PostgreSQL connection from environment variable
+$dbUrl = 'postgresql://neondb_owner:npg_0kXx8aimHZfn@ep-super-haze-a92tp83o-pooler.gwc.azure.neon.tech/AttendanceSystem?sslmode=require';
+$dbConfig = parse_url($dbUrl);
 
+// Extract database credentials
+$dbHost = $dbConfig['host'] ?? '';
+$dbPort = $dbConfig['port'] ?? 5432;
+$dbUser = $dbConfig['user'] ?? '';
+$dbPass = $dbConfig['pass'] ?? '';
+$dbName = ltrim($dbConfig['path'] ?? '', '/');
 
 try {
     // Get POST data
     $input = file_get_contents('php://input');
     $data = json_decode($input, true);
-        
+    
     if (!$data || !isset($data['qr_data'])) {
         throw new Exception("Missing 'qr_data' in request");
     }
@@ -40,7 +38,6 @@ try {
     }
 
     // Validate required fields in QR data
-    
     $required_fields = ['studentId', 'fullname', 'Date', 'time'];
     foreach ($required_fields as $field) {
         if (empty($qr_info[$field])) {
@@ -53,52 +50,54 @@ try {
     $date = $qr_info['Date']; // Expected format: YYYY-MM-DD
     $time = $qr_info['time']; // Expected format: HH:MM:SS or HH:MM
 
-    // Database connection - update credentials accordingly
-    $conn = new mysqli("localhost", "root", "", "AttendanceSystem", 3306);
-
-    if ($conn->connect_error) {
-        throw new Exception("Database connection failed: " . $conn->connect_error);
-    }
+    // Database connection using PDO for PostgreSQL
+    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
+    $conn = new PDO($dsn, $dbUser, $dbPass);
+    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
     // Create attendance table if not exists
     $create_table_sql = "CREATE TABLE IF NOT EXISTS attendance (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         student_id INT NOT NULL,
         student_name VARCHAR(255) NOT NULL,
         date DATE NOT NULL,
         time TIME NOT NULL,
         marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_attendance (student_id, date)
+        UNIQUE (student_id, date)
     )";
 
-    if (!$conn->query($create_table_sql)) {
-        throw new Exception("Error creating attendance table: " . $conn->error);
-    }
+    $conn->exec($create_table_sql);
 
     // Check if attendance already marked for student on the date
-    $check_sql = "SELECT id FROM attendance WHERE student_id = ? AND date = ?";
+    $check_sql = "SELECT id FROM attendance WHERE student_id = :student_id AND date = :date";
     $stmt = $conn->prepare($check_sql);
-    $stmt->bind_param("is", $student_id, $date);
+    $stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
+    $stmt->bindParam(':date', $date);
     $stmt->execute();
-    $result = $stmt->get_result();
 
-    if ($result->num_rows > 0) {
+    if ($stmt->rowCount() > 0) {
         echo json_encode([
             "status" => "error",
-            "message" => "Attendance already marked for this student on  " . $date
+            "message" => "Attendance already marked for this student on " . $date
         ]);
-        $stmt->close();
-        $conn->close();
         exit;
     }
-    $stmt->close();
 
     // Insert attendance record
-    $insert_sql = "INSERT INTO attendance (student_id, student_name, date, time) VALUES (?, ?, ?, ?)";
+    $insert_sql = "INSERT INTO attendance (student_id, student_name, date, time) 
+                   VALUES (:student_id, :student_name, :date, :time)";
     $stmt = $conn->prepare($insert_sql);
-    $stmt->bind_param("isss", $student_id, $student_name, $date, $time);
+    $stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
+    $stmt->bindParam(':student_name', $student_name);
+    $stmt->bindParam(':date', $date);
+    $stmt->bindParam(':time', $time);
 
     if ($stmt->execute()) {
+        // Get last inserted record details
+        $last_sql = "SELECT * FROM attendance WHERE id = LASTVAL()";
+        $last_stmt = $conn->query($last_sql);
+        $record = $last_stmt->fetch(PDO::FETCH_ASSOC);
+
         echo json_encode([
             "status" => "success",
             "message" => "Attendance marked successfully for student " . $student_name,
@@ -107,16 +106,19 @@ try {
                 "fullname" => $student_name,
                 "Date" => $date,
                 "time" => $time,
-                "marked_at" => date('Y-m-d H:i:s')
+                "marked_at" => $record['marked_at']
             ]
         ]);
     } else {
-        throw new Exception("Failed to mark attendance: " . $stmt->error);
+        throw new Exception("Failed to mark attendance");
     }
 
-    $stmt->close();
-    $conn->close();
-
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode([
+        "status" => "error",
+        "message" => "Database error: " . $e->getMessage()
+    ]);
 } catch (Exception $e) {
     http_response_code(400);
     echo json_encode([
