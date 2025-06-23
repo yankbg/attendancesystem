@@ -25,12 +25,14 @@ try {
     $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
     $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 } catch (PDOException $e) {
+    http_response_code(500);
     echo json_encode([
         "status" => "error",
         "message" => "Database connection failed: " . $e->getMessage()
     ]);
     exit;
 }
+
 try {
     // Query attendance records sorted by date descending, then time descending
     $sql = "SELECT student_name, student_id, date, time FROM attendance ORDER BY date DESC, time DESC";
@@ -45,6 +47,7 @@ try {
             "data" => [],
             "count" => 0
         ]);
+        exit;
     } else {
         // Convert student_id to int for consistency
         foreach ($attendance_records as &$record) {
@@ -56,6 +59,7 @@ try {
             "data" => $attendance_records,
             "count" => count($attendance_records)
         ]);
+        exit;
     }
 } catch (PDOException $e) {
     http_response_code(500);
@@ -63,4 +67,5 @@ try {
         "status" => "error",
         "message" => "Query failed: " . $e->getMessage()
     ]);
+    exit;
 }
