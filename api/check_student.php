@@ -49,56 +49,55 @@ if (!is_numeric($studentId)) {
     exit;
 }
 
-// Connect to database
-$conn = new mysqli("localhost", "root", "", "AttendanceSystem", 3306);
-if ($conn->connect_error) {
+// Parse PostgreSQL connection info from Neon URL
+$dbUrl = 'postgresql://neondb_owner:npg_0kXx8aimHZfn@ep-super-haze-a92tp83o-pooler.gwc.azure.neon.tech/AttendanceSystem?sslmode=require';
+$dbConfig = parse_url($dbUrl);
+
+$dbHost = $dbConfig['host'] ?? '';
+$dbPort = $dbConfig['port'] ?? 5432;
+$dbUser = $dbConfig['user'] ?? '';
+$dbPass = $dbConfig['pass'] ?? '';
+$dbName = ltrim($dbConfig['path'] ?? '', '/');
+
+try {
+    // Connect to PostgreSQL via PDO
+    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
+    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+} catch (PDOException $e) {
     echo json_encode([
         "status" => "error",
-        "message" => "Database connection failed: " . $conn->connect_error
+        "message" => "Database connection failed: " . $e->getMessage()
     ]);
     exit;
 }
 
-// Prepare and execute query (case-insensitive search on name)
-$lowerFullname = strtolower($fullname);
-$stmt = $conn->prepare("SELECT id, image_path FROM students WHERE id = ? AND LOWER(name) = ?");
-if (!$stmt) {
+try {
+    // Prepare and execute query with case-insensitive name comparison using ILIKE
+    $sql = "SELECT id, image_path FROM students WHERE id = :id AND name ILIKE :name";
+    $stmt = $pdo->prepare($sql);
+    $stmt->bindValue(':id', (int)$studentId, PDO::PARAM_INT);
+    $stmt->bindValue(':name', $fullname, PDO::PARAM_STR);
+    $stmt->execute();
+
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($row) {
+        echo json_encode([
+            "status" => "success",
+            "exists" => true,
+            "image_path" => $row['image_path'] // Provide relative or absolute URL to student image
+        ]);
+    } else {
+        echo json_encode([
+            "status" => "error",
+            "exists" => false,
+            "message" => "Student not found"
+        ]);
+    }
+} catch (PDOException $e) {
     echo json_encode([
         "status" => "error",
-        "message" => "Prepare failed: " . $conn->error
-    ]);
-    $conn->close();
-    exit;
-}
-
-$stmt->bind_param("is", $studentId, $lowerFullname);
-
-if (!$stmt->execute()) {
-    echo json_encode([
-        "status" => "error",
-        "message" => "Execute failed: " . $stmt->error
-    ]);
-    $stmt->close();
-    $conn->close();
-    exit;
-}
-
-$result = $stmt->get_result();
-
-if ($row = $result->fetch_assoc()) {
-    echo json_encode([
-        "status" => "success",
-        "exists" => true,
-        "image_path" => $row['image_path'] // Provide relative or absolute URL to student image
-    ]);
-} else {
-    echo json_encode([
-        "status" => "error",
-        "exists" => false,
-        "message" => "Student not found"
+        "message" => "Query failed: " . $e->getMessage()
     ]);
 }
-
-$stmt->close();
-$conn->close();
 ?>
