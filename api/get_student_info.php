@@ -10,10 +10,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit();
 }
 
-// Database connection
-$conn = new mysqli("localhost", "root", "", "AttendanceSystem", 3306);
-if ($conn->connect_error) {
-    echo json_encode(["status" => "error", "message" => "DB connection failed: " . $conn->connect_error]);
+// Parse PostgreSQL connection info from Neon URL
+$dbUrl = 'postgresql://neondb_owner:npg_0kXx8aimHZfn@ep-super-haze-a92tp83o-pooler.gwc.azure.neon.tech/AttendanceSystem?sslmode=require';
+$dbConfig = parse_url($dbUrl);
+
+$dbHost = $dbConfig['host'] ?? '';
+$dbPort = $dbConfig['port'] ?? 5432;
+$dbUser = $dbConfig['user'] ?? '';
+$dbPass = $dbConfig['pass'] ?? '';
+$dbName = ltrim($dbConfig['path'] ?? '', '/');
+
+try {
+    // Connect to PostgreSQL via PDO
+    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
+    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+} catch (PDOException $e) {
+    echo json_encode(["status" => "error", "message" => "DB connection failed: " . $e->getMessage()]);
     exit;
 }
 
@@ -28,32 +40,23 @@ if (empty($id) || !is_numeric($id) || empty($name)) {
     exit;
 }
 
-// Prepare statement with case-insensitive name comparison
-$lowerName = strtolower($name);
-$stmt = $conn->prepare("SELECT image_path FROM students WHERE id = ? AND LOWER(name) = ?");
-if (!$stmt) {
-    echo json_encode(["status" => "error", "message" => "Prepare failed : " . $conn->error]);
-    $conn->close();
-    exit;
+try {
+    // Prepare statement with case-insensitive name comparison using ILIKE
+    $sql = "SELECT image_path FROM students WHERE id = :id AND name ILIKE :name";
+    $stmt = $pdo->prepare($sql);
+    $stmt->bindValue(':id', (int)$id, PDO::PARAM_INT);
+    $stmt->bindValue(':name', $name, PDO::PARAM_STR);
+    $stmt->execute();
+
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($row) {
+        echo json_encode(["status" => "success", "image_path" => $row['image_path']]);
+    } else {
+        echo json_encode(["status" => "error", "message" => "Image not found"]);
+    }
+} catch (PDOException $e) {
+    echo json_encode(["status" => "error", "message" => "Query failed: " . $e->getMessage()]);
 }
 
-$stmt->bind_param("is", $id, $lowerName);
-
-if (!$stmt->execute()) {
-    echo json_encode(["status" => "error", "message" => "Execute failed: " . $stmt->error]);
-    $stmt->close();
-    $conn->close();
-    exit;
-}
-
-$result = $stmt->get_result();
-
-if ($row = $result->fetch_assoc()) {
-    echo json_encode(["status" => "success", "image_path" => $row['image_path']]);
-} else {
-    echo json_encode(["status" => "error", "message" => "Image not found"]);
-}
-
-$stmt->close();
-$conn->close();
 ?>
