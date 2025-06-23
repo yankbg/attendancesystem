@@ -20,52 +20,66 @@ $dbUser = $dbConfig['user'] ?? '';
 $dbPass = $dbConfig['pass'] ?? '';
 $dbName = ltrim($dbConfig['path'] ?? '', '/');
 
-try {
-    // Connect to PostgreSQL via PDO
-    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
-    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-} catch (PDOException $e) {
+// Build connection string for pg_connect
+$connString = sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s sslmode=require",
+    $dbHost,
+    $dbPort,
+    $dbName,
+    $dbUser,
+    $dbPass
+);
+
+// Connect to PostgreSQL
+$dbconn = pg_connect($connString);
+
+if (!$dbconn) {
     http_response_code(500);
     echo json_encode([
         "status" => "error",
-        "message" => "Database connection failed: " . $e->getMessage()
+        "message" => "Could not connect to database"
     ]);
     exit;
 }
 
-try {
-    // Query attendance records sorted by date descending, then time descending
-    $sql = "SELECT student_name, student_id, date, time FROM attendance ORDER BY date DESC, time DESC";
-    $stmt = $pdo->query($sql);
+// Query attendance records sorted by date descending, then time descending
+$sql = "SELECT student_name, student_id, date, time FROM attendance ORDER BY date DESC, time DESC";
+$result = pg_query($dbconn, $sql);
 
-    $attendance_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    if (empty($attendance_records)) {
-        echo json_encode([
-            "status" => "success",
-            "message" => "No attendance records found",
-            "data" => [],
-            "count" => 0
-        ]);
-        exit;
-    } else {
-        // Convert student_id to int for consistency
-        foreach ($attendance_records as &$record) {
-            $record['student_id'] = (int)$record['student_id'];
-        }
-        echo json_encode([
-            "status" => "success",
-            "message" => "Attendance records retrieved successfully",
-            "data" => $attendance_records,
-            "count" => count($attendance_records)
-        ]);
-        exit;
-    }
-} catch (PDOException $e) {
+if (!$result) {
     http_response_code(500);
     echo json_encode([
         "status" => "error",
-        "message" => "Query failed: " . $e->getMessage()
+        "message" => "Query failed: " . pg_last_error($dbconn)
     ]);
+    pg_close($dbconn);
     exit;
 }
+
+$attendance_records = [];
+while ($row = pg_fetch_assoc($result)) {
+    // Convert student_id to int
+    $row['student_id'] = (int)$row['student_id'];
+    $attendance_records[] = $row;
+}
+
+pg_free_result($result);
+pg_close($dbconn);
+
+if (empty($attendance_records)) {
+    echo json_encode([
+        "status" => "success",
+        "message" => "No attendance records found",
+        "data" => [],
+        "count" => 0
+    ]);
+} else {
+    echo json_encode([
+        "status" => "success",
+        "message" => "Attendance records retrieved successfully",
+        "data" => $attendance_records,
+        "count" => count($attendance_records)
+    ]);
+}
+exit;
+?>
