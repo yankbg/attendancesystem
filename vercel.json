@@ -9,7 +9,7 @@
     { 
       "src": "/api/(.*)", 
       "dest": "/api/$1",
-      "methods": ["GET", "POST", "OPTIONS"]  // Explicitly allowed methods
+      "methods": ["GET", "POST", "OPTIONS"]  
     },
     { 
       "src": "/(.*)", 
