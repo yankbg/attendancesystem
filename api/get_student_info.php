@@ -20,43 +20,63 @@ $dbUser = $dbConfig['user'] ?? '';
 $dbPass = $dbConfig['pass'] ?? '';
 $dbName = ltrim($dbConfig['path'] ?? '', '/');
 
-try {
-    // Connect to PostgreSQL via PDO
-    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
-    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-} catch (PDOException $e) {
-    echo json_encode(["status" => "error", "message" => "DB connection failed: " . $e->getMessage()]);
+// Build connection string
+$connString = sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s sslmode=require",
+    $dbHost,
+    $dbPort,
+    $dbName,
+    $dbUser,
+    $dbPass
+);
+
+// Connect to PostgreSQL
+$dbconn = pg_connect($connString);
+
+if (!$dbconn) {
+    echo json_encode(["status" => "error", "message" => "DB connection failed"]);
     exit;
 }
 
 // Parse JSON or form-data input
-$input = json_decode(file_get_contents('php://input'), true);
+$inputJSON = file_get_contents('php://input');
+$input = json_decode($inputJSON, true);
 $id = $input['student_id'] ?? $_POST['student_id'] ?? '';
 $name = $input['student_name'] ?? $_POST['student_name'] ?? '';
 
 // Validate inputs
 if (empty($id) || !is_numeric($id) || empty($name)) {
     echo json_encode(["status" => "error", "message" => "Invalid or missing student_id or student_name"]);
+    pg_close($dbconn);
     exit;
 }
 
-try {
-    // Prepare statement with case-insensitive name comparison using ILIKE
-    $sql = "SELECT image_path FROM students WHERE id = :id AND name ILIKE :name";
-    $stmt = $pdo->prepare($sql);
-    $stmt->bindValue(':id', (int)$id, PDO::PARAM_INT);
-    $stmt->bindValue(':name', $name, PDO::PARAM_STR);
-    $stmt->execute();
+// Prepare the query with case-insensitive name comparison using ILIKE
+$query = "SELECT image_path FROM students WHERE id = $1 AND name ILIKE $2";
+$result = pg_prepare($dbconn, "get_image_path", $query);
 
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if ($row) {
-        echo json_encode(["status" => "success", "image_path" => $row['image_path']]);
-    } else {
-        echo json_encode(["status" => "error", "message" => "Image not found"]);
-    }
-} catch (PDOException $e) {
-    echo json_encode(["status" => "error", "message" => "Query failed: " . $e->getMessage()]);
+if (!$result) {
+    echo json_encode(["status" => "error", "message" => "Failed to prepare query"]);
+    pg_close($dbconn);
+    exit;
 }
 
+// Execute the prepared statement
+$result = pg_execute($dbconn, "get_image_path", [(int)$id, $name]);
+
+if (!$result) {
+    echo json_encode(["status" => "error", "message" => "Query failed: " . pg_last_error($dbconn)]);
+    pg_close($dbconn);
+    exit;
+}
+
+$row = pg_fetch_assoc($result);
+pg_free_result($result);
+pg_close($dbconn);
+
+if ($row) {
+    echo json_encode(["status" => "success", "image_path" => $row['image_path']]);
+} else {
+    echo json_encode(["status" => "error", "message" => "Image not found"]);
+}
 ?>
