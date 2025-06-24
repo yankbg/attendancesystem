@@ -1,5 +1,5 @@
 <?php
-$url = "https://attendancesytem-007.vercel.app/api/check_student.php";
+$url = "https://attendancesystem-007.vercel.app/api/check_student.php";
 
 $options = [
     "http" => [
