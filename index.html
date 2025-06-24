@@ -129,9 +129,11 @@
                         alert(response.message || 'Student not found.');
                     }
                 },
-                error: function() {
-                    alert('Error checking student in database. ');
-                }
+                error: function(xhr, status, error) {
+    console.error('AJAX error:', status, error);
+    alert('Error checking student in database: ' + error);
+}
+
             });
         });
     </script>
