@@ -11,7 +11,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit();
 }
 
-// Load environment variables (you can use vlucas/phpdotenv or set in your environment)
+// Load environment variables
 $cloudinaryUrl = getenv('CLOUDINARY_URL'); // e.g. cloudinary://API_KEY:API_SECRET@CLOUD_NAME
 $dbUrl = getenv('DATABASE_URL'); // e.g. postgresql://user:pass@host/dbname?sslmode=require
 
@@ -27,7 +27,7 @@ if (!$matches) {
 }
 list(, $cloudinaryApiKey, $cloudinaryApiSecret, $cloudinaryCloudName) = $matches;
 
-// Parse PostgreSQL connection info from DATABASE_URL or use your Neon URL directly
+// Parse PostgreSQL connection info from DATABASE_URL
 if (!$dbUrl) {
     echo json_encode(['status' => 'error', 'message' => 'Missing DATABASE_URL environment variable']);
     exit;
@@ -82,8 +82,6 @@ if ($decodedImage === false) {
 function uploadToCloudinary($base64Image, $cloudName, $apiKey, $apiSecret) {
     $url = "https://api.cloudinary.com/v1_1/$cloudName/image/upload";
 
-    // Prepare unsigned upload preset or use signed upload
-    // For simplicity, we'll do a signed upload here
     $timestamp = time();
     $paramsToSign = "timestamp=$timestamp$apiSecret";
     $signature = sha1($paramsToSign);
@@ -116,58 +114,87 @@ if (!$imageUrl) {
     exit;
 }
 
-// 5. Connect to PostgreSQL using PDO
-try {
-    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=$sslmode";
-    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-} catch (PDOException $e) {
-    echo json_encode(['status' => 'error', 'message' => 'Database connection failed: ' . $e->getMessage()]);
+// 5. Connect to PostgreSQL using native pgsql functions
+$connString = sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+    $dbHost,
+    $dbPort,
+    $dbName,
+    $dbUser,
+    $dbPass,
+    $sslmode
+);
+
+$dbconn = pg_connect($connString);
+
+if (!$dbconn) {
+    echo json_encode(['status' => 'error', 'message' => 'Database connection failed']);
     exit;
 }
 
 // 6. Create students table if not exists
-try {
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS students (
-            id VARCHAR(50) PRIMARY KEY,
-            name VARCHAR(100) NOT NULL,
-            image_path TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ");
-} catch (PDOException $e) {
-    echo json_encode(['status' => 'error', 'message' => 'Failed to create table: ' . $e->getMessage()]);
+$createTableSQL = "
+    CREATE TABLE IF NOT EXISTS students (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        image_path TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+";
+
+$result = pg_query($dbconn, $createTableSQL);
+if (!$result) {
+    echo json_encode(['status' => 'error', 'message' => 'Failed to create table: ' . pg_last_error($dbconn)]);
+    pg_close($dbconn);
     exit;
 }
 
 // 7. Check for duplicate student ID only (allow duplicate names)
-try {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM students WHERE id = :id");
-    $stmt->execute(['id' => $id]);
-    $count = $stmt->fetchColumn();
-    if ($count > 0) {
-        echo json_encode(['status' => 'error', 'message' => 'Student with this ID already registered']);
-        exit;
-    }
-} catch (PDOException $e) {
-    echo json_encode(['status' => 'error', 'message' => 'Failed to check duplicates: ' . $e->getMessage()]);
+$checkSQL = "SELECT COUNT(*) FROM students WHERE id = $1";
+$result = pg_prepare($dbconn, "check_duplicate", $checkSQL);
+if (!$result) {
+    echo json_encode(['status' => 'error', 'message' => 'Failed to prepare duplicate check query']);
+    pg_close($dbconn);
+    exit;
+}
+
+$result = pg_execute($dbconn, "check_duplicate", [$id]);
+if (!$result) {
+    echo json_encode(['status' => 'error', 'message' => 'Failed to execute duplicate check query']);
+    pg_close($dbconn);
+    exit;
+}
+
+$count = pg_fetch_result($result, 0, 0);
+pg_free_result($result);
+
+if ($count > 0) {
+    echo json_encode(['status' => 'error', 'message' => 'Student with this ID already registered']);
+    pg_close($dbconn);
     exit;
 }
 
 // 8. Insert student record
-try {
-    $stmt = $pdo->prepare("INSERT INTO students (id, name, image_path) VALUES (:id, :name, :image_path)");
-    $stmt->execute([
-        'id' => $id,
-        'name' => $name,
-        'image_path' => $imageUrl
-    ]);
-    echo json_encode([
-        'status' => 'success',
-        'message' => 'Student registered successfully',
-        'image_url' => $imageUrl
-    ]);
-} catch (PDOException $e) {
-    echo json_encode(['status' => 'error', 'message' => 'Failed to insert student: ' . $e->getMessage()]);
+$insertSQL = "INSERT INTO students (id, name, image_path) VALUES ($1, $2, $3)";
+$result = pg_prepare($dbconn, "insert_student", $insertSQL);
+if (!$result) {
+    echo json_encode(['status' => 'error', 'message' => 'Failed to prepare insert query']);
+    pg_close($dbconn);
     exit;
 }
+
+$result = pg_execute($dbconn, "insert_student", [$id, $name, $imageUrl]);
+if (!$result) {
+    echo json_encode(['status' => 'error', 'message' => 'Failed to insert student: ' . pg_last_error($dbconn)]);
+    pg_close($dbconn);
+    exit;
+}
+
+pg_close($dbconn);
+
+echo json_encode([
+    'status' => 'success',
+    'message' => 'Student registered successfully',
+    'image_url' => $imageUrl
+]);
+exit;
