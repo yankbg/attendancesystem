@@ -44,34 +44,64 @@ $dbUser = $dbConfig['user'] ?? '';
 $dbPass = $dbConfig['pass'] ?? '';
 $dbName = ltrim($dbConfig['path'] ?? '', '/');
 
-try {
-    // Connect to PostgreSQL via PDO
-    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
-    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-} catch (PDOException $e) {
+// Build connection string
+$connString = sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s sslmode=require",
+    $dbHost,
+    $dbPort,
+    $dbName,
+    $dbUser,
+    $dbPass
+);
+
+// Connect to PostgreSQL
+$dbconn = pg_connect($connString);
+
+if (!$dbconn) {
     echo json_encode([
         "status" => "error",
-        "message" => "Database connection failed: " . $e->getMessage()
+        "message" => "Database connection failed"
     ]);
     exit;
 }
 
-try {
-    // Prepare and execute the query
-    $stmt = $pdo->prepare("SELECT student_id, student_name, time FROM attendance WHERE date = :date");
-    $stmt->bindParam(':date', $date);
-    $stmt->execute();
+// Prepare the query
+$query = "SELECT student_id, student_name, time FROM attendance WHERE date = $1";
+$result = pg_prepare($dbconn, "get_attendance_by_date", $query);
 
-    $attendanceRecords = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    echo json_encode([
-        "status" => "success",
-        "date" => $date,
-        "data" => $attendanceRecords
-    ]);
-} catch (PDOException $e) {
+if (!$result) {
     echo json_encode([
         "status" => "error",
-        "message" => "Query failed: " . $e->getMessage()
+        "message" => "Failed to prepare query"
     ]);
+    pg_close($dbconn);
+    exit;
 }
+
+// Execute the prepared statement with the date parameter
+$result = pg_execute($dbconn, "get_attendance_by_date", [$date]);
+
+if (!$result) {
+    echo json_encode([
+        "status" => "error",
+        "message" => "Query failed: " . pg_last_error($dbconn)
+    ]);
+    pg_close($dbconn);
+    exit;
+}
+
+$attendanceRecords = [];
+while ($row = pg_fetch_assoc($result)) {
+    $attendanceRecords[] = $row;
+}
+
+pg_free_result($result);
+pg_close($dbconn);
+
+echo json_encode([
+    "status" => "success",
+    "date" => $date,
+    "data" => $attendanceRecords
+]);
+exit;
+?>
