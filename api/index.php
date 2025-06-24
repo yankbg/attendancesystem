@@ -1,4 +1,3 @@
-
 <?php
 $url = "https://attendancesytem-007.vercel.app/api/check_student.php";
 
@@ -10,7 +9,8 @@ $options = [
             "studentId" => "123",
             "fullname" => "john bob"
         ]),
-        "timeout" => 10
+        "timeout" => 10,
+        "ignore_errors" => true // <-- important to get response even on HTTP error
     ]
 ];
 
@@ -18,8 +18,15 @@ $context = stream_context_create($options);
 $response = file_get_contents($url, false, $context);
 
 if ($response === false) {
-    // Handle error
-    echo "Request failed";
+    echo "Request failed\n";
 } else {
-    echo $response;
+    // Output response and HTTP status code
+    echo "HTTP Response:\n";
+    echo $response . "\n";
+
+    if (isset($http_response_header)) {
+        foreach ($http_response_header as $header) {
+            echo $header . "\n";
+        }
+    }
 }
