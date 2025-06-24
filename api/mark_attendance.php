@@ -21,11 +21,32 @@ $dbUser = $dbConfig['user'] ?? '';
 $dbPass = $dbConfig['pass'] ?? '';
 $dbName = ltrim($dbConfig['path'] ?? '', '/');
 
+// Connect to PostgreSQL
+$connString = sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s sslmode=require",
+    $dbHost,
+    $dbPort,
+    $dbName,
+    $dbUser,
+    $dbPass
+);
+
+$dbconn = pg_connect($connString);
+
+if (!$dbconn) {
+    http_response_code(500);
+    echo json_encode([
+        "status" => "error",
+        "message" => "Could not connect to database"
+    ]);
+    exit;
+}
+
 try {
     // Get POST data
     $input = file_get_contents('php://input');
     $data = json_decode($input, true);
-    
+
     if (!$data || !isset($data['qr_data'])) {
         throw new Exception("Missing 'qr_data' in request");
     }
@@ -50,11 +71,6 @@ try {
     $date = $qr_info['Date']; // Expected format: YYYY-MM-DD
     $time = $qr_info['time']; // Expected format: HH:MM:SS or HH:MM
 
-    // Database connection using PDO for PostgreSQL
-    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
-    $conn = new PDO($dsn, $dbUser, $dbPass);
-    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
     // Create attendance table if not exists
     $create_table_sql = "CREATE TABLE IF NOT EXISTS attendance (
         id SERIAL PRIMARY KEY,
@@ -66,60 +82,66 @@ try {
         UNIQUE (student_id, date)
     )";
 
-    $conn->exec($create_table_sql);
+    $result = pg_query($dbconn, $create_table_sql);
+    if (!$result) {
+        throw new Exception("Failed to create table: " . pg_last_error($dbconn));
+    }
 
     // Check if attendance already marked for student on the date
-    $check_sql = "SELECT id FROM attendance WHERE student_id = :student_id AND date = :date";
-    $stmt = $conn->prepare($check_sql);
-    $stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
-    $stmt->bindParam(':date', $date);
-    $stmt->execute();
+    $check_sql = "SELECT id FROM attendance WHERE student_id = $1 AND date = $2";
+    $result = pg_prepare($dbconn, "check_attendance", $check_sql);
+    if (!$result) {
+        throw new Exception("Failed to prepare check query: " . pg_last_error($dbconn));
+    }
 
-    if ($stmt->rowCount() > 0) {
+    $result = pg_execute($dbconn, "check_attendance", [$student_id, $date]);
+    if (!$result) {
+        throw new Exception("Failed to execute check query: " . pg_last_error($dbconn));
+    }
+
+    if (pg_num_rows($result) > 0) {
         echo json_encode([
             "status" => "error",
             "message" => "Attendance already marked for this student on " . $date
         ]);
+        pg_free_result($result);
+        pg_close($dbconn);
         exit;
     }
+    pg_free_result($result);
 
     // Insert attendance record
-    $insert_sql = "INSERT INTO attendance (student_id, student_name, date, time) 
-                   VALUES (:student_id, :student_name, :date, :time)";
-    $stmt = $conn->prepare($insert_sql);
-    $stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
-    $stmt->bindParam(':student_name', $student_name);
-    $stmt->bindParam(':date', $date);
-    $stmt->bindParam(':time', $time);
-
-    if ($stmt->execute()) {
-        // Get last inserted record details
-        $last_sql = "SELECT * FROM attendance WHERE id = LASTVAL()";
-        $last_stmt = $conn->query($last_sql);
-        $record = $last_stmt->fetch(PDO::FETCH_ASSOC);
-
-        echo json_encode([
-            "status" => "success",
-            "message" => "Attendance marked successfully for student " . $student_name,
-            "data" => [
-                "studentId" => $student_id,
-                "fullname" => $student_name,
-                "Date" => $date,
-                "time" => $time,
-                "marked_at" => $record['marked_at']
-            ]
-        ]);
-    } else {
-        throw new Exception("Failed to mark attendance");
+    $insert_sql = "INSERT INTO attendance (student_id, student_name, date, time) VALUES ($1, $2, $3, $4) RETURNING *";
+    $result = pg_prepare($dbconn, "insert_attendance", $insert_sql);
+    if (!$result) {
+        throw new Exception("Failed to prepare insert query: " . pg_last_error($dbconn));
     }
 
-} catch (PDOException $e) {
-    http_response_code(500);
+    $result = pg_execute($dbconn, "insert_attendance", [$student_id, $student_name, $date, $time]);
+    if (!$result) {
+        throw new Exception("Failed to execute insert query: " . pg_last_error($dbconn));
+    }
+
+    $record = pg_fetch_assoc($result);
+    pg_free_result($result);
+    pg_close($dbconn);
+
     echo json_encode([
-        "status" => "error",
-        "message" => "Database error: " . $e->getMessage()
+        "status" => "success",
+        "message" => "Attendance marked successfully for student " . $student_name,
+        "data" => [
+            "studentId" => $student_id,
+            "fullname" => $student_name,
+            "Date" => $date,
+            "time" => $time,
+            "marked_at" => $record['marked_at']
+        ]
     ]);
+
 } catch (Exception $e) {
+    if ($dbconn) {
+        pg_close($dbconn);
+    }
     http_response_code(400);
     echo json_encode([
         "status" => "error",
