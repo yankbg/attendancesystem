@@ -60,45 +60,71 @@ $dbUser = $dbConfig['user'] ?? '';
 $dbPass = $dbConfig['pass'] ?? '';
 $dbName = ltrim($dbConfig['path'] ?? '', '/');
 
-try {
-    // Connect to PostgreSQL via PDO
-    $dsn = "pgsql:host=$dbHost;port=$dbPort;dbname=$dbName;sslmode=require";
-    $pdo = new PDO($dsn, $dbUser, $dbPass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-} catch (PDOException $e) {
+// Build connection string
+$connString = sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s sslmode=require",
+    $dbHost,
+    $dbPort,
+    $dbName,
+    $dbUser,
+    $dbPass
+);
+
+// Connect to PostgreSQL
+$dbconn = pg_connect($connString);
+
+if (!$dbconn) {
     echo json_encode([
         "status" => "error",
-        "message" => "Database connection failed: " . $e->getMessage()
+        "message" => "Database connection failed"
     ]);
     exit;
 }
 
-try {
-    // Prepare and execute query with case-insensitive name comparison using ILIKE
-    $sql = "SELECT id, image_path FROM students WHERE id = :id AND name ILIKE :name";
-    $stmt = $pdo->prepare($sql);
-    $stmt->bindValue(':id', (int)$studentId, PDO::PARAM_INT);
-    $stmt->bindValue(':name', $fullname, PDO::PARAM_STR);
-    $stmt->execute();
+// Prepare the query with case-insensitive name comparison (ILIKE)
+$query = "SELECT id, image_path FROM students WHERE id = $1 AND name ILIKE $2";
 
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+$result = pg_prepare($dbconn, "check_student", $query);
 
-    if ($row) {
-        echo json_encode([
-            "status" => "success",
-            "exists" => true,
-            "image_path" => $row['image_path'] // Provide relative or absolute URL to student image
-        ]);
-    } else {
-        echo json_encode([
-            "status" => "error",
-            "exists" => false,
-            "message" => "Student not found"
-        ]);
-    }
-} catch (PDOException $e) {
+if (!$result) {
     echo json_encode([
         "status" => "error",
-        "message" => "Query failed: " . $e->getMessage()
+        "message" => "Failed to prepare query"
+    ]);
+    pg_close($dbconn);
+    exit;
+}
+
+// Execute the prepared statement
+$result = pg_execute($dbconn, "check_student", [(int)$studentId, $fullname]);
+
+if (!$result) {
+    echo json_encode([
+        "status" => "error",
+        "message" => "Query execution failed"
+    ]);
+    pg_close($dbconn);
+    exit;
+}
+
+$row = pg_fetch_assoc($result);
+
+pg_free_result($result);
+pg_close($dbconn);
+
+if ($row) {
+    echo json_encode([
+        "status" => "success",
+        "exists" => true,
+        "image_path" => $row['image_path'] // Provide relative or absolute URL to student image
+    ]);
+} else {
+    echo json_encode([
+        "status" => "error",
+        "exists" => false,
+        "message" => "Student not found"
     ]);
 }
+
+exit;
 ?>
