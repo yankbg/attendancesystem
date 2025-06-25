@@ -1,4 +1,8 @@
 <?php
+// Disable error display to prevent breaking JSON output; enable logging instead
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+error_reporting(E_ALL);
 
 header('Content-Type: application/json');
 header("Access-Control-Allow-Origin: *");
@@ -25,6 +29,13 @@ $contentType = $_SERVER["CONTENT_TYPE"] ?? '';
 if (stripos($contentType, 'application/json') !== false) {
     $inputJSON = file_get_contents('php://input');
     $input = json_decode($inputJSON, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        echo json_encode([
+            "status" => "error",
+            "message" => "Invalid JSON input"
+        ]);
+        exit;
+    }
     $studentId = $input['studentId'] ?? '';
     $fullname = $input['fullname'] ?? '';
 } else {
@@ -50,9 +61,18 @@ if (!is_numeric($studentId)) {
     exit;
 }
 
-// Parse PostgreSQL connection info from Neon URL
-$dbUrl = 'postgresql://neondb_owner:npg_0kXx8aimHZfn@ep-super-haze-a92tp83o-pooler.gwc.azure.neon.tech/AttendanceSystem?sslmode=require';
+// Parse PostgreSQL connection info from Neon URL (use environment variable if possible)
+$dbUrl = getenv('DATABASE_URL') ?: 'postgresql://neondb_owner:npg_0kXx8aimHZfn@ep-super-haze-a92tp83o-pooler.gwc.azure.neon.tech/AttendanceSystem?sslmode=require';
 $dbConfig = parse_url($dbUrl);
+
+if (!$dbConfig) {
+    error_log("Invalid DATABASE_URL format");
+    echo json_encode([
+        "status" => "error",
+        "message" => "Database configuration error"
+    ]);
+    exit;
+}
 
 $dbHost = $dbConfig['host'] ?? '';
 $dbPort = $dbConfig['port'] ?? 5432;
@@ -74,6 +94,7 @@ $connString = sprintf(
 $dbconn = pg_connect($connString);
 
 if (!$dbconn) {
+    error_log("Database connection failed: " . pg_last_error());
     echo json_encode([
         "status" => "error",
         "message" => "Database connection failed"
@@ -87,6 +108,7 @@ $query = "SELECT id, image_path FROM students WHERE id = $1 AND name ILIKE $2";
 $result = pg_prepare($dbconn, "check_student", $query);
 
 if (!$result) {
+    error_log("Failed to prepare query: " . pg_last_error($dbconn));
     echo json_encode([
         "status" => "error",
         "message" => "Failed to prepare query"
@@ -99,6 +121,7 @@ if (!$result) {
 $result = pg_execute($dbconn, "check_student", [(int)$studentId, $fullname]);
 
 if (!$result) {
+    error_log("Query execution failed: " . pg_last_error($dbconn));
     echo json_encode([
         "status" => "error",
         "message" => "Query execution failed"
