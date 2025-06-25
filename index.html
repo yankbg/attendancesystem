@@ -94,7 +94,7 @@
 
             // AJAX call to check student
             $.ajax({
-                url: 'https://attendancesystem-007.vercel.app/api/check_student.php',
+                url: '/api/check_student.php',
                 method: 'POST',
                 data: { studentId: studentId, fullname: fullName },
                 dataType: 'json',
