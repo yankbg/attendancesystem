@@ -77,65 +77,62 @@
 
     <script>
         $('#studentForm').on('submit', function(event) {
-            event.preventDefault();
+    event.preventDefault();
 
-            const fullName = $('#fullName').val().trim().toLowerCase();
-            const studentId = $('#studentId').val().trim();
+    const fullName = $('#fullName').val().trim().toLowerCase();
+    const studentId = $('#studentId').val().trim();
 
-            if (!fullName || !studentId) {
-                alert('Please enter both Full Name and Student ID.');
-                return;
+    if (!fullName || !studentId) {
+        alert('Please enter both Full Name and Student ID.');
+        return;
+    }
+
+    if (!/^\d+$/.test(studentId)) {
+        alert('Student ID must be numeric.');
+        return;
+    }
+
+    $('#qrcode').empty();
+    $('#studentImage').attr('src', '');
+    $('#result').hide();
+
+    $.ajax({
+        url: 'https://attendancesystem-007.vercel.app/api/check_student.php', // Update to your actual domain
+        method: 'POST',
+        data: { studentId: studentId, fullname: fullName },
+        dataType: 'json',
+        success: function(response) {
+            if (response.status === 'success' && response.exists) {
+                const currentDate = new Date();
+                const date = currentDate.toISOString().split('T')[0];
+                const time = currentDate.toTimeString().split(' ')[0].slice(0,5);
+
+                const studentInfo = {
+                    studentId: studentId,
+                    fullname: fullName,
+                    Date: date,
+                    time: time
+                };
+                const jsonString = JSON.stringify(studentInfo);
+
+                $('#qrcode').qrcode({
+                    text: jsonString,
+                    width: 200,
+                    height: 200
+                });
+
+                $('#studentImage').attr('src', response.image_path);
+                $('#result').show();
+            } else {
+                alert(response.message || 'Student not found.');
             }
-
-            // Clear previous results
-            $('#qrcode').empty();
-            $('#studentImage').attr('src', '');
-            $('#result').hide();
-
-            // AJAX call to check student
-            $.ajax({
-                url: '/api/check_student.php',
-                method: 'POST',
-                data: { studentId: studentId, fullname: fullName },
-                dataType: 'json',
-                success: function(response) {
-                    if (response.status === 'success' && response.exists) {
-                        // Generate QR code JSON
-                        const currentDate = new Date();
-                        const date = currentDate.toISOString().split('T')[0];
-                        const time = currentDate.toTimeString().split(' ')[0].slice(0,5);
-
-                        const studentInfo = {
-                            studentId: studentId,
-                            fullname: fullName,
-                            Date: date,
-                            time: time
-                        };
-                        const jsonString = JSON.stringify(studentInfo);
-
-                        // Generate QR code
-                        $('#qrcode').qrcode({
-                            text: jsonString,
-                            width: 200,
-                            height: 200
-                        });
-
-                        // Show student image
-                        // Assuming image_path is relative to this HTML file or full URL
-                        $('#studentImage').attr('src', response.image_path);
-                        $('#result').show();
-
-                    } else {
-                        alert(response.message || 'Student not found.');
-                    }
-                },
-                error: function(xhr, status, error) {
-    console.error('AJAX error:', status, error);
-    alert('Error checking student in database: ' + error);
-}
-
-            });
-        });
+        },
+        error: function(xhr, status, error) {
+            console.error('AJAX error:', status, error, xhr.responseText);
+            alert('Error checking student in database007: ' + (xhr.responseJSON?.message || error));
+        }
+    });
+});
     </script>
 </body>
 </html>
