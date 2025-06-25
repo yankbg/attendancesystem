@@ -97,7 +97,7 @@
     $('#result').hide();
 
     $.ajax({
-        url: 'https://attendancesystem-007.vercel.app/api/check_student.php', // Update to your actual domain
+        url: '/api/check_student.php', // Update to your actual domain
         method: 'POST',
         data: { studentId: studentId, fullname: fullName },
         dataType: 'json',
