@@ -81,31 +81,39 @@ if ($decodedImage === false) {
 // 4. Upload image to Cloudinary
 function uploadToCloudinary($base64Image, $cloudName, $apiKey, $apiSecret) {
     $url = "https://api.cloudinary.com/v1_1/$cloudName/image/upload";
-
+    
     $timestamp = time();
     $paramsToSign = "timestamp=$timestamp$apiSecret";
     $signature = sha1($paramsToSign);
-
-    $postFields = [
+    
+    $postData = http_build_query([
         'file' => 'data:image/jpeg;base64,' . $base64Image,
         'api_key' => $apiKey,
         'timestamp' => $timestamp,
         'signature' => $signature
+    ]);
+    
+    $opts = [
+        "http" => [
+            "method" => "POST",
+            "header" => "Content-type: application/x-www-form-urlencoded",
+            "content" => $postData,
+            "timeout" => 30,
+            "ignore_errors" => true // Allows reading response on HTTP errors
+        ]
     ];
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    $response = curl_exec($ch);
-    curl_close($ch);
-
-    $result = json_decode($response, true);
-    if (isset($result['secure_url'])) {
-        return $result['secure_url'];
+    
+    $context = stream_context_create($opts);
+    $response = @file_get_contents($url, false, $context); // Suppress warnings
+    
+    // Check HTTP status code
+    if ($response === false || !isset($http_response_header[0]) || strpos($http_response_header[0], '200 OK') === false) {
+        error_log("Cloudinary upload failed: " . ($response ?: "No response"));
+        return null;
     }
-    return null;
+    
+    $result = json_decode($response, true);
+    return $result['secure_url'] ?? null;
 }
 
 $imageUrl = uploadToCloudinary($imageData, $cloudinaryCloudName, $cloudinaryApiKey, $cloudinaryApiSecret);
